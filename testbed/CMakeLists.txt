@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 include(FetchContent)
 
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
+
 project(testbed LANGUAGES C CXX)
 
 add_executable(${PROJECT_NAME} main.cpp)
@@ -63,3 +65,4 @@ endif()
 
 add_subdirectory(lab_1)
 add_subdirectory(lab_2)
+add_subdirectory(lab_3)

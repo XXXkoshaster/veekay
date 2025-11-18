@@ -1,11 +1,14 @@
 #version 450
 
+// Входные данные из вершинного шейдера
 layout (location = 0) in vec3 f_position_world;
 layout (location = 1) in vec3 f_normal_world;
 layout (location = 2) in vec2 f_uv;
 
+// Выходной цвет пикселя
 layout (location = 0) out vec4 final_color;
 
+// Структуры источников света
 struct DirectionalLight {
     vec3 direction;
     float _pad0;
@@ -26,6 +29,7 @@ struct PointLight {
     float outerCutOff;
 };
 
+// Uniform буфер сцены
 layout (binding = 0, std140) uniform SceneUniforms {
 	mat4 view_projection;
     DirectionalLight directional_light;
@@ -33,6 +37,7 @@ layout (binding = 0, std140) uniform SceneUniforms {
     float _pad0;
 };
 
+// Push constants для материала модели
 layout (push_constant) uniform ModelUniforms {
 	mat4 model;
 	vec3 albedo_color;
@@ -43,10 +48,12 @@ layout (push_constant) uniform ModelUniforms {
     float _pad[2];
 };
 
+// Storage buffer с массивом источников света
 layout (binding = 2, std430) readonly buffer PointLightsSSBO {
     PointLight point_lights[];
 };
 
+// Расчет направленного освещения (Blinn-Phong)
 vec3 calculate_directional_light(DirectionalLight light, vec3 normal, vec3 view_dir, vec3 base_color) {
     vec3 light_dir = normalize(-light.direction);
     float diff = max(dot(normal, light_dir), 0.0);
@@ -59,6 +66,7 @@ vec3 calculate_directional_light(DirectionalLight light, vec3 normal, vec3 view_
     return (diffuse + specular) * light.intensity;
 }
 
+// Расчет точечного/прожекторного освещения (Blinn-Phong + затухание)
 vec3 calculate_point_light(PointLight light, vec3 normal, vec3 frag_pos, vec3 view_dir, vec3 base_color) {
     if (light.intensity <= 0.0) {
         return vec3(0.0);
@@ -66,6 +74,7 @@ vec3 calculate_point_light(PointLight light, vec3 normal, vec3 frag_pos, vec3 vi
 
     vec3 light_dir = normalize(light.position - frag_pos);
 
+    // Расчет конуса для прожектора
     float spot_factor = 1.0;
     if (light.type > 0.5) {
         float theta = dot(light_dir, normalize(-light.direction));
@@ -80,6 +89,7 @@ vec3 calculate_point_light(PointLight light, vec3 normal, vec3 frag_pos, vec3 vi
     float spec = pow(max(dot(normal, halfway_dir), 0.0), shininess);
     vec3 specular = light.color * spec * specular_color;
 
+    // Затухание по расстоянию
     float distance = length(light.position - frag_pos);
     float attenuation = 1.0 / (1 + light.linear * distance + light.quadratic * (distance * distance));
 
@@ -92,11 +102,14 @@ void main() {
 
    vec3 base_color = albedo_color;
 
+   // Рассеянное освещение (ambient)
    float ambient_strength = 0.1f;
    vec3 ambient = ambient_strength * base_color;
 
+   // Сумма всех компонент освещения
    vec3 result = ambient + calculate_directional_light(directional_light, norm, view_dir, base_color);
 
+   // Добавление всех точечных/прожекторных источников
    for (int i = 0; i < point_lights.length(); ++i) {
        result += calculate_point_light(point_lights[i], norm, f_position_world, view_dir, base_color);
    }
