@@ -82,7 +82,7 @@ union vec2 {
 	}
 
 	vec2 operator-() const {
-		return {-x, -y};
+		return {{-x, -y}};
 	}
 
 	vec2 operator*(const vec2& other) const {
@@ -194,7 +194,7 @@ union vec3 {
 		return result -= scalar;
 	}
 
-	vec3 operator-() const { return {-x, -y, -z}; }
+	vec3 operator-() const { return {{-x, -y, -z}}; }
 
 	vec3 operator*(const vec3& other) const {
 		vec3 result = *this;
@@ -241,11 +241,11 @@ union vec3 {
 	}
 
 	static vec3 cross(const vec3& lhs, const vec3& rhs) {
-		return {
+		return {{
 			(lhs.y * rhs.z) - (lhs.z * rhs.y),
 			(lhs.z * rhs.x) - (lhs.x * rhs.z),
 			(lhs.x * rhs.y) - (lhs.y * rhs.x)
-		};
+		}};
 	}
 
 	float& operator[](size_t index) { return elements[index]; }

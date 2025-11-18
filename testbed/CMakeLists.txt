@@ -60,3 +60,6 @@ if(GLSLC_FOUND)
 	add_custom_target(shaders DEPENDS ${_SHADER_BINARIES})
 	add_dependencies(${PROJECT_NAME} shaders)
 endif()
+
+add_subdirectory(lab_1)
+add_subdirectory(lab_2)

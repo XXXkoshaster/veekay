@@ -86,6 +86,14 @@ Buffer::~Buffer() {
 	vkDestroyBuffer(device, buffer, nullptr);
 }
 
+size_t Buffer::structureAlignment(size_t size) {
+	VkPhysicalDeviceProperties properties;
+	vkGetPhysicalDeviceProperties(veekay::app.vk_physical_device, &properties);
+	
+	size_t alignment = properties.limits.minUniformBufferOffsetAlignment;
+	return (size + alignment - 1) & ~(alignment - 1);
+}
+
 Texture::Texture(VkCommandBuffer cmd,
                  uint32_t width, uint32_t height,
                  VkFormat format,
