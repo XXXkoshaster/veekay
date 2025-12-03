@@ -1,10 +1,20 @@
 #include <cstdint>
 #include <climits>
-#include <iostream>
 
+#include <iostream>
 #include <vector>
 
 #include <vulkan/vulkan_core.h>
+
+#ifndef VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME
+#define VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME "VK_KHR_dynamic_rendering"
+#endif
+
+// Structures are already defined in vulkan_core.h for Vulkan 1.3+
+// Only define constants if needed
+#ifndef VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME
+#define VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME "VK_KHR_dynamic_rendering"
+#endif
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -68,36 +78,61 @@ std::vector<VkCommandBuffer> vk_command_buffers;
 
 namespace veekay {
 
-Application app;
+	Application app;
 
-namespace input {
+	namespace input {
 
-void setup(void* const window_ptr);
-void cache();
+		void setup(void* const window_ptr);
+		void cache();
 
-} // namespace input
+	} // namespace input
+
+	namespace graphics {
+
+		void init();
+
+	} // namespace graphics
 
 } // namespace veekay
 
 int veekay::run(const veekay::ApplicationInfo& app_info) {
+	std::cerr << "[VEKAY] Starting veekay::run()...\n";
+	std::cerr.flush();
+	
 	veekay::app.running = true;
 	
+	std::cerr << "[VEKAY] Initializing GLFW...\n";
+	std::cerr.flush();
 	if (!glfwInit()) {
-		std::cerr << "Failed to initialize GLFW\n";
+		std::cerr << "[ERROR] Failed to initialize GLFW\n";
+		std::cerr.flush();
 		return 1;
 	}
+	std::cerr << "[VEKAY] GLFW initialized\n";
+	std::cerr.flush();
 
+	std::cerr << "[VEKAY] Setting GLFW window hints...\n";
+	std::cerr.flush();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
+	std::cerr << "[VEKAY] Creating GLFW window...\n";
+	std::cerr.flush();
 	window = glfwCreateWindow(window_default_width, window_default_height,
 	                          window_title, nullptr, nullptr);
 	if (!window) {
-		std::cerr << "Failed to create GLFW window\n";
+		std::cerr << "[ERROR] Failed to create GLFW window\n";
+		std::cerr.flush();
 		return 1;
 	}
+	std::cerr << "[VEKAY] GLFW window created\n";
+	std::cerr.flush();
 
+	std::cerr << "[VEKAY] Setting up input...\n";
+	std::cerr.flush();
 	veekay::input::setup(window);
+	std::cerr << "[VEKAY] Input setup completed\n";
+	std::cerr.flush();
 
 	/* NOTE:
 		needed because otherwise on macos everything will be rendered in the top
@@ -113,31 +148,45 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 	app.window_width = window_default_width;
 	app.window_height = window_default_height;
 #endif
+	std::cerr << "[VEKAY] Window size: " << app.window_width << "x" << app.window_height << "\n";
+	std::cerr.flush();
 
 	{ // NOTE: Initialize Vulkan: grab device and create swapchain
+		std::cerr << "[VEKAY] Initializing Vulkan instance...\n";
+		std::cerr.flush();
 		vkb::InstanceBuilder instance_builder;
 
-		auto builder_result = instance_builder.require_api_version(1, 2, 0)
+		auto builder_result = instance_builder.require_api_version(1, 3, 0)
 		                                      .request_validation_layers()
 		                                      .use_default_debug_messenger()
 		                                      .build();
 		if (!builder_result) {
-			std::cerr << builder_result.error().message() << '\n';
+			std::cerr << "[ERROR] Failed to build Vulkan instance: " << builder_result.error().message() << '\n';
+			std::cerr.flush();
 			return 1;
 		}
+		std::cerr << "[VEKAY] Vulkan instance created\n";
+		std::cerr.flush();
 
 		auto instance = builder_result.value();
 
 		vk_instance = instance.instance;
 		vk_debug_messenger = instance.debug_messenger;
 
+		std::cerr << "[VEKAY] Creating window surface...\n";
+		std::cerr.flush();
 		if (glfwCreateWindowSurface(vk_instance, window, nullptr, &vk_surface) != VK_SUCCESS) {
 			const char* message;
 			glfwGetError(&message);
-			std::cerr << message << '\n';
+			std::cerr << "[ERROR] Failed to create window surface: " << message << '\n';
+			std::cerr.flush();
 			return 1;
 		}
+		std::cerr << "[VEKAY] Window surface created\n";
+		std::cerr.flush();
 
+		std::cerr << "[VEKAY] Selecting physical device...\n";
+		std::cerr.flush();
 		vkb::PhysicalDeviceSelector physical_device_selector(instance);
 
 		VkPhysicalDeviceFeatures device_features{
@@ -148,62 +197,182 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 		                                               .set_required_features(device_features)
 		                                               .select();
 		if (!selector_result) {
-			std::cerr << selector_result.error().message() << '\n';
+			std::cerr << "[ERROR] Failed to select physical device: " << selector_result.error().message() << '\n';
+			std::cerr.flush();
 			return 1;
 		}
+		std::cerr << "[VEKAY] Physical device selected\n";
+		std::cerr.flush();
 
 		auto physical_device = selector_result.value();
 
 		{
-			vkb::DeviceBuilder device_builder(physical_device);
-
-			auto result = device_builder.build();
-
-			if (!result) {
-				std::cerr << result.error().message() << '\n';
+			std::cerr << "[VEKAY] Creating logical device with VK_KHR_dynamic_rendering...\n";
+			std::cerr.flush();
+			// Create device manually to enable VK_KHR_dynamic_rendering extension and feature
+			// Also need VK_KHR_swapchain for swapchain creation
+			const char* device_extensions[] = {
+				"VK_KHR_dynamic_rendering",
+				"VK_KHR_swapchain"
+			};
+			
+			VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering_features{
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES,
+				.pNext = nullptr,
+				.dynamicRendering = VK_TRUE,
+			};
+			
+			VkPhysicalDeviceFeatures2 features2{
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+				.pNext = &dynamic_rendering_features,
+			};
+			features2.features.samplerAnisotropy = VK_TRUE;
+			
+			// Get graphics queue family index
+			std::cerr << "[VEKAY] Finding graphics queue family...\n";
+			std::cerr.flush();
+			uint32_t graphics_queue_family = UINT32_MAX;
+			uint32_t queue_family_count = 0;
+			vkGetPhysicalDeviceQueueFamilyProperties(physical_device.physical_device, &queue_family_count, nullptr);
+			std::vector<VkQueueFamilyProperties> queue_families(queue_family_count);
+			if (queue_family_count > 0) {
+				vkGetPhysicalDeviceQueueFamilyProperties(physical_device.physical_device, &queue_family_count, queue_families.data());
+			}
+			
+			for (uint32_t i = 0; i < queue_family_count; ++i) {
+				if (queue_families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+					graphics_queue_family = i;
+					break;
+				}
+			}
+			
+			if (graphics_queue_family == UINT32_MAX) {
+				std::cerr << "[ERROR] Failed to find graphics queue family\n";
+				std::cerr.flush();
 				return 1;
 			}
-
-			auto device = result.value();
-
-			vk_device = device.device;
-			vk_physical_device = device.physical_device;
-
-			auto queue_type = vkb::QueueType::graphics;
+			std::cerr << "[VEKAY] Graphics queue family found: " << graphics_queue_family << "\n";
+			std::cerr.flush();
 			
-			vk_graphics_queue = device.get_queue(queue_type).value();
-			vk_graphics_queue_family = device.get_queue_index(queue_type).value();
+			float queue_priority = 1.0f;
+			VkDeviceQueueCreateInfo queue_info{
+				.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+				.queueFamilyIndex = graphics_queue_family,
+				.queueCount = 1,
+				.pQueuePriorities = &queue_priority,
+			};
+			
+			VkDeviceCreateInfo device_info{
+				.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+				.pNext = &features2,
+				.queueCreateInfoCount = 1,
+				.pQueueCreateInfos = &queue_info,
+				.enabledExtensionCount = sizeof(device_extensions) / sizeof(device_extensions[0]),
+				.ppEnabledExtensionNames = device_extensions,
+			};
+			
+			VkDevice device_handle;
+			VkResult device_result = vkCreateDevice(physical_device.physical_device, &device_info, nullptr, &device_handle);
+			if (device_result != VK_SUCCESS) {
+				std::cerr << "[ERROR] Failed to create Vulkan device with VK_KHR_dynamic_rendering, VkResult: " << device_result << "\n";
+				std::cerr.flush();
+				return 1;
+			}
+			std::cerr << "[VEKAY] Logical device created\n";
+			std::cerr.flush();
+			
+			vk_device = device_handle;
+			vk_physical_device = physical_device.physical_device;
+			
+			vkGetDeviceQueue(vk_device, graphics_queue_family, 0, &vk_graphics_queue);
+			vk_graphics_queue_family = graphics_queue_family;
+			std::cerr << "[VEKAY] Graphics queue obtained\n";
+			std::cerr.flush();
 		}
 
-		vkb::SwapchainBuilder swapchain_builder(vk_physical_device, vk_device, vk_surface);
+		std::cerr << "[VEKAY] Creating swapchain...\n";
+		std::cerr << "[VEKAY]   Physical device: " << (void*)vk_physical_device << "\n";
+		std::cerr << "[VEKAY]   Device: " << (void*)vk_device << "\n";
+		std::cerr << "[VEKAY]   Surface: " << (void*)vk_surface << "\n";
+		std::cerr << "[VEKAY]   Window size: " << app.window_width << "x" << app.window_height << "\n";
+		std::cerr.flush();
+		
+		try {
+			vkb::SwapchainBuilder swapchain_builder(vk_physical_device, vk_device, vk_surface);
+			std::cerr << "[VEKAY] SwapchainBuilder created\n";
+			std::cerr.flush();
 
-		vk_swapchain_format = VK_FORMAT_B8G8R8A8_UNORM;
+			vk_swapchain_format = VK_FORMAT_B8G8R8A8_UNORM;
 
-		VkSurfaceFormatKHR surface_format{
-			.format = vk_swapchain_format,
-			.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
-		};
+			VkSurfaceFormatKHR surface_format{
+				.format = vk_swapchain_format,
+				.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+			};
 
-		auto swapchain_result = swapchain_builder.set_desired_format(surface_format)
-		                                         .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-		                                         .set_desired_extent(app.window_width, app.window_height)
-		                                         .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
-		                                         .build();
+			std::cerr << "[VEKAY] Configuring swapchain builder...\n";
+			std::cerr.flush();
+			swapchain_builder.set_desired_format(surface_format);
+			swapchain_builder.set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR);
+			swapchain_builder.set_desired_extent(app.window_width, app.window_height);
+			swapchain_builder.add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+			
+			std::cerr << "[VEKAY] Building swapchain...\n";
+			std::cerr.flush();
+			auto swapchain_result = swapchain_builder.build();
 
-		if (!swapchain_result) {
-			std::cerr << swapchain_result.error().message() << '\n';
+			if (!swapchain_result) {
+				std::cerr << "[ERROR] Failed to create swapchain: " << swapchain_result.error().message() << '\n';
+				std::cerr.flush();
+				return 1;
+			}
+			std::cerr << "[VEKAY] Swapchain created successfully\n";
+			std::cerr.flush();
+
+			auto swapchain = swapchain_result.value();
+
+			vk_swapchain = swapchain.swapchain;
+			std::cerr << "[VEKAY] Getting swapchain images...\n";
+			std::cerr.flush();
+			auto images_result = swapchain.get_images();
+			if (!images_result) {
+				std::cerr << "[ERROR] Failed to get swapchain images: " << images_result.error().message() << '\n';
+				std::cerr.flush();
+				return 1;
+			}
+			vk_swapchain_images = images_result.value();
+			
+			std::cerr << "[VEKAY] Getting swapchain image views...\n";
+			std::cerr.flush();
+			auto image_views_result = swapchain.get_image_views();
+			if (!image_views_result) {
+				std::cerr << "[ERROR] Failed to get swapchain image views: " << image_views_result.error().message() << '\n';
+				std::cerr.flush();
+				return 1;
+			}
+			vk_swapchain_image_views = image_views_result.value();
+			std::cerr << "[VEKAY] Swapchain images and views obtained (" << vk_swapchain_images.size() << " images)\n";
+			std::cerr.flush();
+		} catch (const std::exception& e) {
+			std::cerr << "[ERROR] Exception during swapchain creation: " << e.what() << '\n';
+			std::cerr.flush();
+			return 1;
+		} catch (...) {
+			std::cerr << "[ERROR] Unknown exception during swapchain creation\n";
+			std::cerr.flush();
 			return 1;
 		}
 
-		auto swapchain = swapchain_result.value();
-
-		vk_swapchain = swapchain.swapchain;
-		vk_swapchain_images = swapchain.get_images().value();
-		vk_swapchain_image_views = swapchain.get_image_views().value();
-
 		veekay::app.vk_device = vk_device;
 		veekay::app.vk_physical_device = vk_physical_device;
+		std::cerr << "[VEKAY] Vulkan initialization completed\n";
+		std::cerr.flush();
 	}
+
+	std::cerr << "[VEKAY] Calling graphics::init()...\n";
+	std::cerr.flush();
+	graphics::init();
+	std::cerr << "[VEKAY] graphics::init() completed\n";
+	std::cerr.flush();
 
 	{ // NOTE: ImGui initialization
 		IMGUI_CHECKVERSION();
@@ -637,9 +806,22 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 		vkBeginCommandBuffer(onetime_command_buffer, &info);
 	}
 
+	std::cerr << "[VEKAY] Calling app_info.init()...\n";
+	std::cerr.flush();
 	app_info.init(onetime_command_buffer);
+	
+	std::cerr << "[VEKAY] app_info.init() completed. app.running = " << (veekay::app.running ? "true" : "false") << "\n";
+	std::cerr.flush();
+	
+	if (!veekay::app.running) {
+		std::cerr << "[ERROR] Initialization failed! app.running is false\n";
+		std::cerr.flush();
+		return 1;
+	}
 
 	{
+		std::cerr << "[VEKAY] Submitting initialization command buffer...\n";
+		std::cerr.flush();
 		vkEndCommandBuffer(onetime_command_buffer);
 
 		VkSubmitInfo info{
@@ -648,12 +830,27 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 			.pCommandBuffers = &onetime_command_buffer,
 		};
 
-		vkQueueSubmit(vk_graphics_queue, 1, &info, VK_NULL_HANDLE);
-		vkQueueWaitIdle(vk_graphics_queue);
+		VkResult submit_result = vkQueueSubmit(vk_graphics_queue, 1, &info, VK_NULL_HANDLE);
+		if (submit_result != VK_SUCCESS) {
+			std::cerr << "[ERROR] Failed to submit initialization command buffer, VkResult: " << submit_result << "\n";
+			std::cerr.flush();
+			return 1;
+		}
+		
+		VkResult wait_result = vkQueueWaitIdle(vk_graphics_queue);
+		if (wait_result != VK_SUCCESS) {
+			std::cerr << "[ERROR] Failed to wait for queue idle, VkResult: " << wait_result << "\n";
+			std::cerr.flush();
+			return 1;
+		}
 
 		vkFreeCommandBuffers(vk_device, vk_command_pool, 1, &onetime_command_buffer);
+		std::cerr << "[VEKAY] Initialization command buffer submitted and completed\n";
+		std::cerr.flush();
 	}
 
+	std::cerr << "[VEKAY] Entering main loop...\n";
+	std::cerr.flush();
 	while (veekay::app.running && !glfwWindowShouldClose(window)) {
 		veekay::input::cache();
 		

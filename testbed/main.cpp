@@ -17,34 +17,36 @@ namespace {
 constexpr uint32_t max_models = 1024;
 
 struct Vertex {
-	veekay::vec3 position;
-	veekay::vec3 normal;
-	veekay::vec2 uv;
+	veekay::vec3 position; // Позиция вершины в 3D
+	veekay::vec3 normal; // Нормаль для освещения
+	veekay::vec2 uv; // Текстурные координаты
 	// NOTE: You can add more attributes
 };
 
 struct SceneUniforms {
-	veekay::mat4 view_projection;
+	veekay::mat4 view_projection;// Матрица камеры (view * projection)
 };
 
+//позволяет рендерить до 1024 моделей с разными трансформациями
 struct ModelUniforms {
-	veekay::mat4 model;
-	veekay::vec3 albedo_color; float _pad0;
+	veekay::mat4 model;  // Матрица трансформации модели
+	veekay::vec3 albedo_color;  // Цвет объекта  
+	float _pad0; // Выравнивание для GPU
 };
 
 struct Mesh {
-	veekay::graphics::Buffer* vertex_buffer;
-	veekay::graphics::Buffer* index_buffer;
-	uint32_t indices;
+	veekay::graphics::Buffer* vertex_buffer; // Вершины (position, normal, uv)
+	veekay::graphics::Buffer* index_buffer; // Индексы треугольников
+	uint32_t indices; // Количество индексов
 };
 
 struct Transform {
-	veekay::vec3 position = {};
-	veekay::vec3 scale = {1.0f, 1.0f, 1.0f};
-	veekay::vec3 rotation = {};
+	veekay::vec3 position = {}; // Позиция в мире
+	veekay::vec3 scale = {1.0f, 1.0f, 1.0f}; // Масштаб
+	veekay::vec3 rotation = {}; // Углы Эйлера
 
 	// NOTE: Model matrix (translation, rotation and scaling)
-	veekay::mat4 matrix() const;
+	veekay::mat4 matrix() const; // Возвращает model матрицу
 };
 
 struct Model {

@@ -16,127 +16,168 @@
 
 namespace {
 
-constexpr uint32_t major_segments = 20;
-constexpr uint32_t minor_segments = 10;
-constexpr float tau = 2.0f * static_cast<float>(M_PI);
+// Параметры генерации тора
+constexpr uint32_t major_segments = 20;  // Сегменты по большому кругу (вокруг центра)
+constexpr uint32_t minor_segments = 10;  // Сегменты по малому кругу (вокруг трубки)
+constexpr float tau = 2.0f * static_cast<float>(M_PI);  // 2π (полный оборот)
 
+// Структура вершины: содержит всю информацию о точке в 3D
 struct Vertex {
-	veekay::vec3 position;
-	veekay::vec3 normal;
-	veekay::vec2 uv;
-	veekay::vec3 color;
+	veekay::vec3 position;  // Позиция в локальных координатах
+	veekay::vec3 normal;    // Нормаль для расчета освещения
+	veekay::vec2 uv;        // Текстурные координаты [0,1]
+	veekay::vec3 color;     // Цвет вершины (градиент из UV)
 };
 
+// Uniform buffer для данных сцены (общие для всех объектов)
+// Передается через descriptor set binding 0
 struct SceneUniforms {
-	veekay::mat4 view_projection;
+	veekay::mat4 view_projection;  // Матрица камеры (view * projection)
 };
 
+// Push constants для быстрой передачи данных в шейдеры (до 128 байт)
+// Обновляется каждый кадр для анимации
 struct PushConstants {
-	veekay::mat4 model;
-	veekay::vec3 animated_color;
-	float padding;
+	veekay::mat4 model;              // Матрица трансформации модели (64 байта)
+	veekay::vec3 animated_color;     // Пульсирующий цвет модуляции (12 байт)
+	float padding;                   // Выравнивание до 16 байт (4 байта)
 };
 
+// Меш: геометрия объекта в GPU памяти
 struct Mesh {
-	veekay::graphics::Buffer* vertex_buffer = nullptr;
-	veekay::graphics::Buffer* index_buffer = nullptr;
-	uint32_t indices = 0;
+	veekay::graphics::Buffer* vertex_buffer = nullptr;  // Буфер вершин
+	veekay::graphics::Buffer* index_buffer = nullptr;   // Буфер индексов
+	uint32_t indices = 0;                               // Количество индексов
 };
 
+// Трансформация объекта в мировом пространстве
 struct Transform {
-	veekay::vec3 position = {};
-	veekay::vec3 scale = {1.0f, 1.0f, 1.0f};
-	veekay::vec3 rotation = {};
+	veekay::vec3 position = {};                  // Позиция в мире
+	veekay::vec3 scale = {1.0f, 1.0f, 1.0f};    // Масштаб по осям
+	veekay::vec3 rotation = {};                  // Углы Эйлера (радианы)
 
+	// Вычисляет model матрицу (TRS: Translation * Rotation * Scale)
 	veekay::mat4 matrix() const;
 };
 
+// Камера: определяет точку наблюдения и проекцию
 struct Camera {
-	constexpr static float default_fov = 60.0f;
-	constexpr static float default_near_plane = 0.01f;
-	constexpr static float default_far_plane = 100.0f;
+	constexpr static float default_fov = 60.0f;           // Угол обзора
+	constexpr static float default_near_plane = 0.01f;    // Ближняя плоскость отсечения
+	constexpr static float default_far_plane = 100.0f;    // Дальняя плоскость отсечения
 
-	veekay::vec3 position = {};
-	veekay::vec3 rotation = {};
+	veekay::vec3 position = {};   // Позиция камеры в мире
+	veekay::vec3 rotation = {};   // Углы поворота камеры
 
 	float fov = default_fov;
 	float near_plane = default_near_plane;
 	float far_plane = default_far_plane;
 
+	// Вычисляет view матрицу (инверсия трансформации камеры)
 	veekay::mat4 view() const;
+	// Вычисляет композицию view * projection
 	veekay::mat4 view_projection(float aspect_ratio) const;
 };
 
+// Глобальные переменные
 inline namespace {
+	// Камера: начальная позиция на расстоянии 4 единицы по оси Z
 	Camera camera{
 		.position = {0.0f, 0.0f, -4.0f}
 	};
 
+	// Геометрия и трансформация тора
 	Mesh torus_mesh;
 	Transform torus_transform{};
 
+	// Uniform buffer для SceneUniforms (view_projection матрица)
 	veekay::graphics::Buffer* scene_uniforms_buffer = nullptr;
 
+	// Vulkan дескрипторы: связывают буферы с шейдерами
 	VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
 	VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
 	VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
 
+	// Vulkan pipeline: определяет как рисовать геометрию
 	VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
 	VkPipeline pipeline = VK_NULL_HANDLE;
 
+	// Скомпилированные шейдеры 
 	VkShaderModule vertex_shader_module = VK_NULL_HANDLE;
 	VkShaderModule fragment_shader_module = VK_NULL_HANDLE;
 
+	// Данные для push constants (обновляются каждый кадр)
 	PushConstants push_constants_data{};
 
-	float rotation_speed = 1.0f;
-	float rotation_angle = 0.0f;
+	// Параметры анимации вращения
+	float rotation_speed = 1.0f;    // Скорость вращения (радиан/сек)
+	float rotation_angle = 0.0f;    // Текущий угол вращения
 
+	// Время предыдущего кадра для вычисления delta_time
 	double previous_time = 0.0;
 }
 
+// Вычисляет model матрицу: преобразует из локальных координат в мировые
+// Порядок: Translation * Rotation * Scale (TRS)
 veekay::mat4 Transform::matrix() const {
+	// 1. Матрица переноса (перемещение объекта в мире)
 	auto translation = veekay::mat4::translation(position);
+	// 2. Матрица масштабирования
 	auto scaling = veekay::mat4::scaling(scale);
 
+	// 3. Матрицы вращения вокруг каждой оси
 	auto rotation_x = veekay::mat4::rotation({1.0f, 0.0f, 0.0f}, rotation.x);
 	auto rotation_y = veekay::mat4::rotation({0.0f, 1.0f, 0.0f}, rotation.y);
 	auto rotation_z = veekay::mat4::rotation({0.0f, 0.0f, 1.0f}, rotation.z);
 
+	// Композиция вращений (порядок важен: Z * Y * X)
 	auto rotation_matrix = rotation_z * rotation_y * rotation_x;
 
+	// Итоговая матрица: сначала масштаб, потом вращение, потом перенос
 	return translation * rotation_matrix * scaling;
 }
 
+// Вычисляет view матрицу: преобразует из мировых координат в координаты камеры
+// Это инверсия трансформации камеры
 veekay::mat4 Camera::view() const {
+	// 1. Инверсия позиции (камера движется в обратном направлении)
 	auto translation = veekay::mat4::translation(-position);
 
+	// 2. Инверсия вращения (отрицательные углы)
 	auto rotation_x = veekay::mat4::rotation({1.0f, 0.0f, 0.0f}, -rotation.x);
 	auto rotation_y = veekay::mat4::rotation({0.0f, 1.0f, 0.0f}, -rotation.y);
 	auto rotation_z = veekay::mat4::rotation({0.0f, 0.0f, 1.0f}, -rotation.z);
 
 	auto rotation_matrix = rotation_z * rotation_y * rotation_x;
 
+	// Порядок обратный: сначала вращение, потом перенос
 	return rotation_matrix * translation;
 }
 
+// Вычисляет view_projection матрицу для трансформации в clip space
 veekay::mat4 Camera::view_projection(float aspect_ratio) const {
+	// Projection: преобразует из координат камеры в clip space [-1,1]
 	auto projection = veekay::mat4::projection(fov, aspect_ratio, near_plane, far_plane);
+	// Композиция: view * projection
 	return view() * projection;
 }
 
+// Загружает скомпилированный шейдер (SPIR-V) из файла
 VkShaderModule loadShaderModule(const char* path) {
+	// Открываем файл в бинарном режиме, курсор в конце для определения размера
 	std::ifstream file(path, std::ios::binary | std::ios::ate);
 	if (!file.is_open()) {
 		return VK_NULL_HANDLE;
 	}
 
+	// Получаем размер файла и читаем в буфер
 	size_t size = static_cast<size_t>(file.tellg());
 	std::vector<uint32_t> buffer(size / sizeof(uint32_t));
 	file.seekg(0);
 	file.read(reinterpret_cast<char*>(buffer.data()), size);
 	file.close();
 
+	// Создаем Vulkan shader module из байткода
 	VkShaderModuleCreateInfo info{
 		.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
 		.codeSize = size,
@@ -387,75 +428,90 @@ void createPipeline() {
 	}
 }
 
+// Создает тор
 void createTorusMesh() {
 	std::vector<Vertex> vertices;
-	vertices.reserve(major_segments * minor_segments);
+	vertices.reserve(major_segments * minor_segments); 
 
+	// Лямбда для вычисления индекса вершины в сетке
 	auto index_of = [](uint32_t major, uint32_t minor) {
 		return major * minor_segments + minor;
 	};
 
+	// Генерация вершин: двойной цикл по большому и малому кругу
 	for (uint32_t i = 0; i < major_segments; ++i) {
+		// Угол на большом круге (вокруг центра тора)
 		float major_angle = tau * static_cast<float>(i) / static_cast<float>(major_segments);
 		float cos_major = std::cos(major_angle);
 		float sin_major = std::sin(major_angle);
 
 		for (uint32_t j = 0; j < minor_segments; ++j) {
+			// Угол на малом круге (вокруг трубки тора)
 			float minor_angle = tau * static_cast<float>(j) / static_cast<float>(minor_segments);
 			float cos_minor = std::cos(minor_angle);
 			float sin_minor = std::sin(minor_angle);
 
-			float outer_radius = 1.1f;
-			float inner_radius = 0.45f;
+			// Радиусы тора
+			float outer_radius = 1.1f;   // Расстояние от центра до центра трубки
+			float inner_radius = 0.45f;  // Радиус трубки
 
+			// Расстояние от центра тора до текущей точки
 			float ring = outer_radius + inner_radius * cos_minor;
 
+			// Позиция вершины в 3D (параметрическое уравнение тора)
 			veekay::vec3 position{
-				ring * cos_major,
-				ring * sin_major,
-				inner_radius * sin_minor
+				ring * cos_major,           // X
+				ring * sin_major,           // Y
+				inner_radius * sin_minor    // Z
 			};
 
+			// Нормаль (направление от поверхности)
 			veekay::vec3 normal{
 				cos_major * cos_minor,
 				sin_major * cos_minor,
 				sin_minor
 			};
 
+			// UV координаты [0,1] для текстурирования
 			veekay::vec2 uv{
 				static_cast<float>(i) / static_cast<float>(major_segments),
 				static_cast<float>(j) / static_cast<float>(minor_segments)
 			};
 
+			// ГРАДИЕНТ
 			veekay::vec3 color{
-				uv.x,
-				uv.y,
-				1.0f - uv.x
+				uv.x,           // R: 0→1 по большому кругу
+				uv.y,           // G: 0→1 по малому кругу
+				1.0f - uv.x     // B: 1→0 (инверсия R)
 			};
 
 			vertices.push_back(Vertex{position, normal, uv, color});
 		}
 	}
 
+	// Генерация индексов: каждый квад разбивается на 2 треугольника
 	std::vector<uint32_t> indices;
-	indices.reserve(major_segments * minor_segments * 6);
+	indices.reserve(major_segments * minor_segments * 6);  // 20 * 10 * 6 = 1200 индексов
 
 	for (uint32_t i = 0; i < major_segments; ++i) {
-		uint32_t next_i = (i + 1) % major_segments;
+		uint32_t next_i = (i + 1) % major_segments;  // Замыкание большого круга
 
 		for (uint32_t j = 0; j < minor_segments; ++j) {
-			uint32_t next_j = (j + 1) % minor_segments;
+			uint32_t next_j = (j + 1) % minor_segments;  // Замыкание малого круга
 
+			// Первый треугольник
 			indices.push_back(index_of(i, j));
 			indices.push_back(index_of(next_i, j));
 			indices.push_back(index_of(next_i, next_j));
 
+			// Второй треугольник
 			indices.push_back(index_of(i, j));
 			indices.push_back(index_of(next_i, next_j));
 			indices.push_back(index_of(i, next_j));
 		}
 	}
 
+	// Создаем GPU буферы
 	torus_mesh.vertex_buffer = new veekay::graphics::Buffer(
 		vertices.size() * sizeof(Vertex), vertices.data(),
 		VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
@@ -522,42 +578,50 @@ void shutdown() {
 	}
 }
 
+// Обновление логики каждый кадр
 void update(double time) {
+	// Вычисляем delta_time для независимости от FPS
 	float delta_time = previous_time > 0.0 ? static_cast<float>(time - previous_time) : 0.0f;
 	previous_time = time;
 
+	// UI контролы для изменения параметров
 	ImGui::Begin("Torus Controls");
 	ImGui::SliderFloat("Field of View", &camera.fov, 30.0f, 110.0f);
 	ImGui::SliderFloat("Rotation Speed", &rotation_speed, -6.0f, 6.0f, "%.2f rad/s");
 	ImGui::End();
 
-	// Camera rotation with mouse
+	// Управление камерой мышью (при зажатой ЛКМ)
 	using namespace veekay::input;
 	if (mouse::isButtonDown(mouse::Button::left)) {
 		auto delta = mouse::cursorDelta();
-		camera.rotation.y += delta.x * 0.005f;
-		camera.rotation.x += delta.y * 0.005f;
-		camera.rotation.x = std::clamp(camera.rotation.x, -1.5f, 1.5f);
+		camera.rotation.y += delta.x * 0.005f;  // Горизонтальное вращение
+		camera.rotation.x += delta.y * 0.005f;  // Вертикальное вращение
+		camera.rotation.x = std::clamp(camera.rotation.x, -1.5f, 1.5f);  // Ограничение угла
 	}
 
-	rotation_angle += rotation_speed * delta_time;
-	rotation_angle = std::fmod(rotation_angle, tau);
+	// Анимация вращения тора
+	rotation_angle += rotation_speed * delta_time;  // Накопление угла
+	rotation_angle = std::fmod(rotation_angle, tau);  // Нормализация [0, 2π]
 	if (rotation_angle < 0.0f) {
-		rotation_angle += tau;
+		rotation_angle += tau;  // Обработка отрицательных значений
 	}
 
+	// Применяем вращение: X=0.35 (наклон), Y=angle (вращение), Z=0
 	torus_transform.rotation = {0.35f, rotation_angle, 0.0f};
 
+	// Пульсирующий цвет: RGB циклически меняются со сдвигом 120°
 	float phase = static_cast<float>(time);
 	push_constants_data.animated_color = {
-		0.5f + 0.5f * std::sin(phase),
-		0.5f + 0.5f * std::sin(phase + 2.0943951f),
-		0.5f + 0.5f * std::sin(phase + 4.1887902f)
+		0.5f + 0.5f * std::sin(phase),              // R: [0, 1]
+		0.5f + 0.5f * std::sin(phase + 2.0943951f), // G: сдвиг 120° (2π/3)
+		0.5f + 0.5f * std::sin(phase + 4.1887902f)  // B: сдвиг 240° (4π/3)
 	};
 
+	// Заполняем push constants
 	push_constants_data.model = torus_transform.matrix();
 	push_constants_data.padding = 0.0f;
 
+	// Обновляем uniform buffer с матрицей камеры
 	float aspect_ratio = static_cast<float>(veekay::app.window_width) /
 	                     static_cast<float>(veekay::app.window_height);
 
@@ -565,6 +629,7 @@ void update(double time) {
 		.view_projection = camera.view_projection(aspect_ratio),
 	};
 
+	// Копируем данные в GPU буфер
 	*reinterpret_cast<SceneUniforms*>(scene_uniforms_buffer->mapped_region) = uniforms;
 }
 

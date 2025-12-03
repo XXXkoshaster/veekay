@@ -53,7 +53,7 @@ layout (binding = 2, std430) readonly buffer PointLightsSSBO {
     PointLight point_lights[];
 };
 
-// Расчет направленного освещения (Blinn-Phong)
+// Расчет направленного освещения
 vec3 calculate_directional_light(DirectionalLight light, vec3 normal, vec3 view_dir, vec3 base_color) {
     vec3 light_dir = normalize(-light.direction);
     float diff = max(dot(normal, light_dir), 0.0);
